@@ -92,6 +92,8 @@
     <LinkIncremental>false</LinkIncremental>
     <IncludePath>$(IncludePath);$(ProjectDir)\lib\boost;$(ProjectDir)\lib\</IncludePath>
     <LibraryPath>$(VC_LibraryPath_x64);$(WindowsSDK_LibraryPath_x64)$(ProjectDir)\lib\boost\stage\lib;$(ProjectDir)\lib\tinyxml2\tinyxml2\bin\tinyxml2\x64-Release-Lib</LibraryPath>
+    <OutDir>$(ProjectDir)\bin\</OutDir>
+    <TargetName>gpx2kml-$(Configuration)</TargetName>
   </PropertyGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
     <ClCompile>

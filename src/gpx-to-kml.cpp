@@ -144,7 +144,6 @@ void WriteFile(std::string_view name, const std::tm& time,
     throw std::invalid_argument(std::string("Failed writing to: ") +
                                 output_path.string());
   }
-  std::cout << "Writing: " << output_path.string() << std::endl;
 }
 
 void ConvertFile(std::string_view input_file,
@@ -195,7 +194,7 @@ void Main(std::string_view input_dir, std::string_view output_dir_string) {
         ".gpx") {
       continue;
     }
-    std::cout << "Enqueuing: " << entry << std::endl;
+    std::cout << "Processing: " << entry << std::endl;
     io_service.post([entry, output_dir]() {
       try {
         ConvertFile(entry.path().string(), output_dir);

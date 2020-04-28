@@ -217,7 +217,7 @@ int main(int argc, char** argv) {
         "Supported options");
     flags_description.add_options()("help", "List command line options")(
         "input_dir", boost::program_options::value<std::string>(),
-        "Glob matching input GPX files.")(
+        "Input directory containing GPX files.")(
         "output_dir", boost::program_options::value<std::string>(),
         "Output directory for KML results.");
 

@@ -1,10 +1,16 @@
+#include <SDKDDKVer.h>
+
+#include <atomic>
+#include <condition_variable>
 #include <cstdlib>
 #include <exception>
 #include <iomanip>
 #include <iostream>
+#include <mutex>
 #include <sstream>
 #include <string>
 #include <string_view>
+#include <syncstream>
 #include <thread>
 #include <vector>
 
@@ -12,6 +18,7 @@
 #include "boost/algorithm/string/trim.hpp"
 #include "boost/asio.hpp"
 #include "boost/filesystem.hpp"
+#include "boost/format.hpp"
 #include "boost/lexical_cast.hpp"
 #include "boost/nowide/fstream.hpp"
 #include "boost/program_options.hpp"
@@ -94,6 +101,15 @@ void WriteFile(std::string_view name, const std::tm& time,
   basename << std::put_time(&time, "%Y-%m-%d") << " " << name;
   std::stringstream filename;
   filename << basename.str() << ".kml";
+  const boost::filesystem::path output_path =
+      output_dir / NormalizeFilename(filename.str());
+  if (boost::filesystem::exists(output_path)) {
+    throw std::invalid_argument(
+        boost::str(boost::format("Output file already exists, skipping \"%s\"") % output_path.string()));
+  }
+  std::osyncstream(std::cout) << "Writing: " << output_path << std::endl;
+  std::shared_ptr<FILE> file(
+      boost::nowide::fopen(output_path.string().data(), "w"), fclose);
 
   tinyxml2::XMLDocument xml_doc;
   xml_doc.InsertEndChild(xml_doc.NewDeclaration());
@@ -135,46 +151,51 @@ void WriteFile(std::string_view name, const std::tm& time,
       ->SetText(coordinate_string.str().data());
   xml_doc.InsertEndChild(root);
 
-  const boost::filesystem::path output_path =
-      output_dir / NormalizeFilename(filename.str());
-
-  std::shared_ptr<FILE> file(
-      boost::nowide::fopen(output_path.string().data(), "w"), fclose);
   if (xml_doc.SaveFile(file.get()) != tinyxml2::XML_SUCCESS) {
-    throw std::invalid_argument(std::string("Failed writing to: ") +
-                                output_path.string());
+    throw std::invalid_argument(
+        boost::str(boost::format("Failed writing to: \"%s\"") % output_path));
   }
 }
 
 void ConvertFile(std::string_view input_file,
                  const boost::filesystem::path& output_dir) {
-  tinyxml2::XMLDocument xml_doc;
-  if (xml_doc.LoadFile(input_file.data()) != tinyxml2::XML_SUCCESS) {
-    throw std::invalid_argument(xml_doc.ErrorStr());
+  try {
+    tinyxml2::XMLDocument xml_doc;
+    if (xml_doc.LoadFile(input_file.data()) != tinyxml2::XML_SUCCESS) {
+      throw std::invalid_argument(boost::str(
+          boost::format("Failed reading XML file %s") % xml_doc.ErrorStr()));
+    }
+    const tinyxml2::XMLElement* root = xml_doc.FirstChildElement("gpx");
+    if (!root) {
+      throw std::invalid_argument("Missing root element");
+    }
+
+    const std::tm time = ParseTime(*root);
+
+    const tinyxml2::XMLElement* track = root->FirstChildElement("trk");
+    if (!track) {
+      throw std::invalid_argument("Missing trk element");
+    }
+
+    const std::string name = ParseName(*track);
+    const Coordinates coordinates = ParseCoordinates(*track);
+
+    WriteFile(name, time, coordinates, output_dir);
+  } catch (const std::exception& error) {
+    throw std::invalid_argument(
+        boost::str(boost::format("%s while parsing: \"%s\"") % error.what() % input_file));
   }
-  const tinyxml2::XMLElement* root = xml_doc.FirstChildElement("gpx");
-  if (!root) {
-    throw std::invalid_argument("Missing root element");
-  }
-
-  const std::tm time = ParseTime(*root);
-
-  const tinyxml2::XMLElement* track = root->FirstChildElement("trk");
-  if (!track) {
-    throw std::invalid_argument("Missing trk element");
-  }
-
-  const std::string name = ParseName(*track);
-  const Coordinates coordinates = ParseCoordinates(*track);
-
-  WriteFile(name, time, coordinates, output_dir);
 }
 
-void Main(std::string_view input_dir, std::string_view output_dir_string) {
-  const boost::filesystem::path output_dir(output_dir_string.data());
+void Main(std::string_view input_dir,
+          std::optional<std::string_view> output_dir_string) {
+  if (!output_dir_string.has_value()) {
+    output_dir_string = input_dir;
+  }
+  const boost::filesystem::path output_dir(output_dir_string->data());
   if (!boost::filesystem::is_directory(output_dir)) {
-    throw std::invalid_argument(std::string("Not a directory: ") +
-                                output_dir.string());
+    throw std::invalid_argument(boost::str(boost::format("Not a directory: \"%s\"") %
+                                *output_dir_string));
   }
 
   boost::asio::io_service io_service;
@@ -185,27 +206,49 @@ void Main(std::string_view input_dir, std::string_view output_dir_string) {
         boost::bind(&boost::asio::io_service::run, &io_service));
   }
 
+  std::atomic<int> num_processed_successfully = 0;
+  std::atomic<int> num_failed = 0;  
+  std::atomic<int> num_in_progress = 0;
+  std::mutex mutex;
+  std::condition_variable busy;
   for (boost::filesystem::directory_entry& entry :
        boost::filesystem::directory_iterator(input_dir.data())) {
     if (!boost::filesystem::is_regular_file(entry)) {
       continue;
     }
-    if (boost::algorithm::to_lower_copy(boost::filesystem::extension(entry)) !=
+    if (boost::algorithm::to_lower_copy(entry.path().extension().string()) !=
         ".gpx") {
       continue;
     }
-    std::cout << "Processing: " << entry << std::endl;
-    io_service.post([entry, output_dir]() {
+    std::osyncstream(std::cout) << "Reading: " << entry << std::endl;
+
+    std::unique_lock<std::mutex> lock(mutex);
+    // Rate limit the work queue to twice the number of tasks as threads.
+    while (num_in_progress >= threads.size() * 2) {
+      busy.wait(lock);
+    }
+    ++num_in_progress;
+
+    io_service.post([entry, output_dir, &num_processed_successfully,
+                     &num_failed, &num_in_progress, &busy]() {
       try {
         ConvertFile(entry.path().string(), output_dir);
+        ++num_processed_successfully;
+        --num_in_progress;
+        busy.notify_one();
       } catch (const std::exception& error) {
-        std::cerr << "error: " << error.what() << std::endl;
+        std::osyncstream(std::cerr) << "error: " << error.what() << std::endl;
+        ++num_failed;
+        --num_in_progress;
+        busy.notify_one();
       }
     });
   }
 
   io_service.stop();
   threads.join_all();
+  std::cout << "Succeeded: " << num_processed_successfully
+            << " Failed: " << num_failed << std::endl;
 }
 
 }  // namespace
@@ -218,7 +261,7 @@ int main(int argc, char** argv) {
         "input_dir", boost::program_options::value<std::string>(),
         "Input directory containing GPX files.")(
         "output_dir", boost::program_options::value<std::string>(),
-        "Output directory for KML results.");
+        "Output directory for KML results. Defaults to input_dir.");
 
     boost::program_options::variables_map flags;
     boost::program_options::store(boost::program_options::parse_command_line(
@@ -230,14 +273,16 @@ int main(int argc, char** argv) {
       std::cout << flags_description << std::endl;
       return EXIT_SUCCESS;
     }
-    if (!flags.count("input_dir") || !flags.count("output_dir")) {
+    if (!flags.count("input_dir")) {
       std::cout << "input_dir and output_dir must be provided!\n";
       std::cout << flags_description << std::endl;
       return EXIT_FAILURE;
     }
-
-    Main(flags["input_dir"].as<std::string>(),
-         flags["output_dir"].as<std::string>());
+    std::optional<std::string> output_dir;
+    if (flags.contains("output_dir")) {
+      output_dir = flags["output_dir"].as<std::string>();
+    }
+    Main(flags["input_dir"].as<std::string>(), output_dir);
   } catch (const std::exception& error) {
     std::cerr << "error: " << error.what() << std::endl;
     return EXIT_FAILURE;

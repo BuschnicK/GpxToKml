@@ -274,7 +274,7 @@ int main(int argc, char** argv) {
       return EXIT_SUCCESS;
     }
     if (!flags.count("input_dir")) {
-      std::cout << "input_dir and output_dir must be provided!\n";
+      std::cout << "input_dir must be provided!\n";
       std::cout << flags_description << std::endl;
       return EXIT_FAILURE;
     }

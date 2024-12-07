@@ -1,6 +1,6 @@
 # GpxToKml
 
-Converts a directory of .gpx files to .kml. The primary use-case is taking a Strava batch download and converting all of the files into a format suitable for Google Earth.
+Converts a directory of .gpx files to .kml. The primary use-case is taking a [Strava batch download](https://support.strava.com/hc/en-us/articles/216918437-Exporting-your-Data-and-Bulk-Export#h_01GG58HC4F1BGQ9PQZZVANN6WF) and converting all of the files into a format suitable for Google Earth.
 
 # Synopsis
 ```

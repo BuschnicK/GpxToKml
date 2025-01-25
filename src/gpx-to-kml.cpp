@@ -20,7 +20,10 @@
 #include "boost/filesystem.hpp"
 #include "boost/format.hpp"
 #include "boost/lexical_cast.hpp"
+#include "boost/nowide/args.hpp"
+#include "boost/nowide/filesystem.hpp"
 #include "boost/nowide/fstream.hpp"
+#include "boost/nowide/iostream.hpp"
 #include "boost/program_options.hpp"
 #include "boost/regex.hpp"
 #include "boost/thread/thread.hpp"
@@ -107,7 +110,7 @@ void WriteFile(std::string_view name, const std::tm& time,
     throw std::invalid_argument(
         boost::str(boost::format("Output file already exists, skipping \"%s\"") % output_path.string()));
   }
-  std::osyncstream(std::cout) << "Writing: " << output_path << std::endl;
+  std::osyncstream(boost::nowide::cout) << "Writing: " << output_path << std::endl;
   std::shared_ptr<FILE> file(
       boost::nowide::fopen(output_path.string().data(), "w"), fclose);
 
@@ -220,7 +223,7 @@ void Main(std::string_view input_dir,
         ".gpx") {
       continue;
     }
-    std::osyncstream(std::cout) << "Reading: " << entry << std::endl;
+    std::osyncstream(boost::nowide::cout) << "Reading: " << entry << std::endl;
 
     std::unique_lock<std::mutex> lock(mutex);
     // Rate limit the work queue to twice the number of tasks as threads.
@@ -237,7 +240,7 @@ void Main(std::string_view input_dir,
         --num_in_progress;
         busy.notify_one();
       } catch (const std::exception& error) {
-        std::osyncstream(std::cerr) << "error: " << error.what() << std::endl;
+        std::osyncstream(boost::nowide::cerr) << "error: " << error.what() << std::endl;
         ++num_failed;
         --num_in_progress;
         busy.notify_one();
@@ -247,13 +250,15 @@ void Main(std::string_view input_dir,
 
   io_service.stop();
   threads.join_all();
-  std::cout << "Succeeded: " << num_processed_successfully
+  boost::nowide::cout << "Succeeded: " << num_processed_successfully
             << " Failed: " << num_failed << std::endl;
 }
 
 }  // namespace
 
 int main(int argc, char** argv) {
+  boost::nowide::nowide_filesystem();
+  boost::nowide::args _(argc, argv);  // Fix arguments - make them UTF-8
   try {
     boost::program_options::options_description flags_description(
         "Supported options");
@@ -270,12 +275,12 @@ int main(int argc, char** argv) {
     boost::program_options::notify(flags);
 
     if (flags.count("help") || flags.empty()) {
-      std::cout << flags_description << std::endl;
+      boost::nowide::cout << flags_description << std::endl;
       return EXIT_SUCCESS;
     }
     if (!flags.count("input_dir")) {
-      std::cout << "input_dir must be provided!\n";
-      std::cout << flags_description << std::endl;
+      boost::nowide::cout << "input_dir must be provided!\n";
+      boost::nowide::cout << flags_description << std::endl;
       return EXIT_FAILURE;
     }
     std::optional<std::string> output_dir;
@@ -284,10 +289,10 @@ int main(int argc, char** argv) {
     }
     Main(flags["input_dir"].as<std::string>(), output_dir);
   } catch (const std::exception& error) {
-    std::cerr << "error: " << error.what() << std::endl;
+    boost::nowide::cerr << "error: " << error.what() << std::endl;
     return EXIT_FAILURE;
   } catch (...) {
-    std::cerr << "Unknown error." << std::endl;
+    boost::nowide::cerr << "Unknown error." << std::endl;
     return EXIT_FAILURE;
   }
 
